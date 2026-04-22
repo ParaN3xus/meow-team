@@ -240,8 +240,11 @@ export const approveLaneProposal = async ({
 
   const assignment = findAssignment(thread.dispatchAssignments, assignmentNumber);
   const lane = findLane(assignment, laneId);
+  const proposalRecovery = lane.recoveryCheckpoint;
+  const resumingProposalApproval =
+    lane.status === "failed" && proposalRecovery?.kind === "proposal_approval";
 
-  if (lane.status !== "awaiting_human_approval") {
+  if (!resumingProposalApproval && lane.status !== "awaiting_human_approval") {
     throw new Error("This proposal is not waiting for human approval.");
   }
 
@@ -290,11 +293,18 @@ export const approveLaneProposal = async ({
       startPoint: proposalCommit,
     });
 
-    pushedCommit = await pushLaneBranch({
-      repositoryPath: threadWorktree.path,
-      branchName: lane.branchName,
-      commitHash: proposalCommit,
-    });
+    if (
+      proposalRecovery?.kind === "proposal_approval" &&
+      proposalRecovery.checkpoint === "branch_pushed"
+    ) {
+      pushedCommit = lane.pushedCommit;
+    } else {
+      pushedCommit = await pushLaneBranch({
+        repositoryPath: threadWorktree.path,
+        branchName: lane.branchName,
+        commitHash: proposalCommit,
+      });
+    }
 
     const synchronizedPullRequest = await synchronizePullRequest({
       repositoryPath: threadWorktree.path,
@@ -317,11 +327,17 @@ export const approveLaneProposal = async ({
           mutableAssignment.canonicalBranchName = resolvedCanonicalBranchName;
         }
         const mutableLane = findLane(mutableAssignment, laneId);
-        if (mutableLane.status !== "awaiting_human_approval") {
+        if (
+          mutableLane.status !== "awaiting_human_approval" &&
+          !(
+            mutableLane.status === "failed" &&
+            mutableLane.recoveryCheckpoint?.kind === "proposal_approval"
+          )
+        ) {
           throw new Error("This proposal is not waiting for human approval.");
         }
 
-        const isRetry = mutableLane.pullRequest?.status === "failed";
+        const isRetry = mutableLane.recoveryCheckpoint?.kind === "proposal_approval";
         const trackingPullRequest =
           mutableLane.pullRequest ??
           createPullRequestRecord({
@@ -348,6 +364,7 @@ export const approveLaneProposal = async ({
         mutableLane.queuedAt = now;
         mutableLane.pushedCommit = pushedCommit;
         mutableLane.lastError = null;
+        mutableLane.recoveryCheckpoint = null;
         mutableLane.pullRequest = {
           ...trackingPullRequest,
           provider: "github",
@@ -410,7 +427,13 @@ export const approveLaneProposal = async ({
           mutableAssignment.canonicalBranchName = resolvedCanonicalBranchName;
         }
         const mutableLane = findLane(mutableAssignment, laneId);
-        if (mutableLane.status !== "awaiting_human_approval") {
+        if (
+          mutableLane.status !== "awaiting_human_approval" &&
+          !(
+            mutableLane.status === "failed" &&
+            mutableLane.recoveryCheckpoint?.kind === "proposal_approval"
+          )
+        ) {
           throw new Error("This proposal is not waiting for human approval.");
         }
 
@@ -427,16 +450,26 @@ export const approveLaneProposal = async ({
             machineReviewedAt: null,
           });
 
+        mutableLane.status = "failed";
         mutableLane.executionPhase = null;
         mutableLane.latestActivity = pushedCommit
-          ? "Human approval pushed the proposal branch, but GitHub draft PR setup failed before coding could be queued."
-          : "Human approval failed before the proposal branch could be pushed and tracked with a GitHub draft PR.";
-        mutableLane.approvalGrantedAt = null;
+          ? "Proposal approval failed after publishing the branch. Confirm /retry to refresh the GitHub draft PR without re-pushing the proposal branch."
+          : "Proposal approval failed before the proposal branch was published. Confirm /retry to resume branch publication and GitHub draft PR setup.";
         mutableLane.workerSlot = null;
         mutableLane.worktreePath = threadWorktree.path;
         mutableLane.proposalCommitHash = proposalCommit;
         mutableLane.queuedAt = null;
         mutableLane.pushedCommit = pushedCommit;
+        mutableLane.recoveryCheckpoint = {
+          kind: "proposal_approval",
+          checkpoint: pushedCommit ? "branch_pushed" : "requested",
+          failedStage: "proposal_approval",
+          resumeStatus: "failed",
+          summary: pushedCommit
+            ? "Resume proposal approval from the saved branch-pushed checkpoint."
+            : "Resume proposal approval from the saved proposal-publication checkpoint.",
+          recordedAt: now,
+        };
         mutableLane.lastError = errorSummary;
         mutableLane.pullRequest = {
           ...trackingPullRequest,

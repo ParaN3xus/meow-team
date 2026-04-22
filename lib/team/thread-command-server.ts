@@ -23,6 +23,7 @@ import {
 } from "@/lib/team/thread-command";
 import { TeamThreadCommandError } from "@/lib/team/thread-command-error";
 import { getTeamThreadRecord, type TeamThreadRecord } from "@/lib/team/history";
+import { describeLaneRecoveryResume } from "@/lib/team/recovery";
 import type { TeamDispatchAssignment, TeamWorkerLaneRecord } from "@/lib/team/types";
 export { TeamThreadCommandError } from "@/lib/team/thread-command-error";
 
@@ -402,7 +403,9 @@ const executeRetryCommand = async ({
       assignmentNumber: assignment.assignmentNumber,
       commandName: command.kind,
       details: [
-        `Proposal ${lane.laneIndex} retry confirmed. The agent can make another 10 automatic retry attempts.`,
+        lane.status === "failed" && lane.recoveryCheckpoint
+          ? `Proposal ${lane.laneIndex} retry confirmed. ${describeLaneRecoveryResume(lane.recoveryCheckpoint)}`
+          : `Proposal ${lane.laneIndex} retry confirmed. The agent can make another 10 automatic retry attempts.`,
       ],
       outcome: "success",
     });

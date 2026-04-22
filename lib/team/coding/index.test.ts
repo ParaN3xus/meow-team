@@ -122,7 +122,11 @@ import {
 import { approveLanePullRequest } from "@/lib/team/coding/archiving";
 import { approveLaneProposal } from "@/lib/team/coding/coding";
 import { createPlannerDispatchAssignment } from "@/lib/team/coding/plan";
-import { ensurePendingDispatchWork, waitForLaneRunCompletion } from "@/lib/team/coding/reviewing";
+import {
+  ensurePendingDispatchWork,
+  resumeFailedLane,
+  waitForLaneRunCompletion,
+} from "@/lib/team/coding/reviewing";
 import {
   resetTeamThreadStorageStateCacheForTests,
   updateTeamThreadStorageRecord,
@@ -3623,9 +3627,178 @@ describe.sequential("approveLaneProposal", () => {
     expect(lane?.latestImplementationCommit).toBe("implementation-commit");
     expect(lane?.pushedCommit).toBeNull();
     expect(lane?.latestActivity).toContain(
-      "publishing the lane branch to GitHub failed before review could start",
+      "Confirm /retry to resume review from the saved implementation checkpoint",
     );
     expect(lane?.lastError).toContain("gh auth token missing");
+  });
+
+  it("resumes failed proposal approval from the saved branch-pushed checkpoint", async () => {
+    const coderRun = vi.fn(
+      () => new Promise<Awaited<ReturnType<TeamRoleDependencies["coderAgent"]["run"]>>>(() => {}),
+    ) as TeamRoleDependencies["coderAgent"]["run"];
+    const worktreeRoot = path.join(dispatchRepository.path, teamConfig.dispatch.worktreeRoot);
+
+    getBranchHeadMock.mockResolvedValue("proposal-commit");
+    commitContainsPathMock.mockResolvedValue(true);
+    synchronizePullRequestMock.mockResolvedValue({
+      url: "https://github.com/example/meow-team/pull/90",
+    });
+
+    await writeExecutionThreadStore({
+      threadId: "thread-proposal-recovery",
+      lane: createProposalApprovalLane({
+        status: "failed",
+        worktreePath: `${worktreeRoot}/meow-1`,
+        proposalCommitHash: "proposal-commit",
+        pushedCommit: {
+          ...basePushedCommit,
+          commitHash: "proposal-commit",
+          commitUrl: "https://github.com/example/meow-team/commit/proposal-commit",
+        },
+        pullRequest: createDraftTrackingPullRequest({
+          status: "failed",
+          updatedAt: FIXED_TIMESTAMP,
+        }),
+        recoveryCheckpoint: {
+          kind: "proposal_approval",
+          checkpoint: "branch_pushed",
+          failedStage: "proposal_approval",
+          resumeStatus: "failed",
+          summary: "Resume proposal approval from the saved branch-pushed checkpoint.",
+          recordedAt: FIXED_TIMESTAMP,
+        },
+        latestActivity:
+          "Proposal approval failed after publishing the branch. Confirm /retry to refresh the GitHub draft PR without re-pushing the proposal branch.",
+        lastError: "GitHub draft PR setup failed.",
+      }),
+      assignmentOverrides: {
+        status: "failed",
+      },
+      runStatus: "failed",
+    });
+
+    await approveLaneProposal({
+      env: createExecutionEnv({
+        coderRun,
+      }),
+      threadId: "thread-proposal-recovery",
+      assignmentNumber: 1,
+      laneId: "lane-1",
+    });
+
+    expect(pushLaneBranchMock).not.toHaveBeenCalled();
+    expect(synchronizePullRequestMock).toHaveBeenCalledWith({
+      repositoryPath: `${worktreeRoot}/meow-1`,
+      branchName: "requests/example/a1-proposal-1",
+      baseBranch: "main",
+      title: "Ship the feature",
+      body: "Implement the approved proposal.",
+      draft: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(coderRun).toHaveBeenCalledTimes(1);
+    });
+
+    const lane = (
+      await getTeamThreadRecord(teamConfig.storage.threadFile, "thread-proposal-recovery")
+    )?.dispatchAssignments[0]?.lanes[0];
+    expect(lane?.status).toBe("coding");
+    expect(lane?.pullRequest?.status).toBe("draft");
+    expect(lane?.recoveryCheckpoint).toBeNull();
+  });
+
+  it("resumes failed review delivery from the saved branch-pushed checkpoint", async () => {
+    const worktreeRoot = path.join(dispatchRepository.path, teamConfig.dispatch.worktreeRoot);
+    const persistedCoderHandoff = {
+      roleId: "coder",
+      roleName: "Coder",
+      summary: "Implemented the approved proposal.",
+      deliverable: "Implementation is ready for machine review.",
+      decision: "continue" as const,
+      sequence: 1,
+      assignmentNumber: 1,
+      updatedAt: FIXED_TIMESTAMP,
+    };
+    const persistedReviewerHandoff = {
+      roleId: "reviewer",
+      roleName: "Reviewer",
+      summary: "Machine review approved the proposal.",
+      deliverable: "Ready for final approval.",
+      decision: "approved" as const,
+      sequence: 2,
+      assignmentNumber: 1,
+      updatedAt: FIXED_TIMESTAMP,
+    };
+
+    synchronizePullRequestMock.mockResolvedValue({
+      url: "https://github.com/example/meow-team/pull/91",
+    });
+
+    await writeExecutionThreadStore({
+      threadId: "thread-review-delivery-recovery",
+      lane: createProposalApprovalLane({
+        status: "failed",
+        executionPhase: null,
+        worktreePath: `${worktreeRoot}/meow-1`,
+        approvalGrantedAt: FIXED_TIMESTAMP,
+        latestImplementationCommit: "review-commit",
+        pushedCommit: {
+          ...basePushedCommit,
+          commitHash: "review-commit",
+          commitUrl: "https://github.com/example/meow-team/commit/review-commit",
+        },
+        latestCoderHandoff: persistedCoderHandoff,
+        latestCoderSummary: persistedCoderHandoff.summary,
+        latestReviewerHandoff: persistedReviewerHandoff,
+        latestReviewerSummary: persistedReviewerHandoff.summary,
+        latestDecision: persistedReviewerHandoff.decision,
+        pullRequest: createDraftTrackingPullRequest({
+          status: "failed",
+          summary: "Machine review approved the branch.",
+          machineReviewedAt: FIXED_TIMESTAMP,
+        }),
+        recoveryCheckpoint: {
+          kind: "review_approval_delivery",
+          checkpoint: "branch_pushed",
+          failedStage: "review_approval_delivery",
+          summary: "Resume final-approval delivery from the saved branch-pushed review checkpoint.",
+          recordedAt: FIXED_TIMESTAMP,
+        },
+        latestActivity:
+          "Review delivery failed after publishing the approved branch. Confirm /retry to refresh the tracking GitHub PR from the saved review checkpoint.",
+        lastError: "GitHub PR refresh failed.",
+      }),
+      assignmentOverrides: {
+        status: "failed",
+      },
+      runStatus: "failed",
+    });
+
+    await resumeFailedLane({
+      env: createExecutionEnv(),
+      threadId: "thread-review-delivery-recovery",
+      assignmentNumber: 1,
+      laneId: "lane-1",
+    });
+
+    expect(pushLaneBranchMock).not.toHaveBeenCalled();
+    expect(synchronizePullRequestMock).toHaveBeenCalledWith({
+      repositoryPath: `${worktreeRoot}/meow-1`,
+      branchName: "requests/example/a1-proposal-1",
+      baseBranch: "main",
+      title: "Ship the feature",
+      body: "Machine review approved the branch.",
+      draft: false,
+    });
+
+    const lane = (
+      await getTeamThreadRecord(teamConfig.storage.threadFile, "thread-review-delivery-recovery")
+    )?.dispatchAssignments[0]?.lanes[0];
+    expect(lane?.status).toBe("approved");
+    expect(lane?.pullRequest?.status).toBe("awaiting_human_approval");
+    expect(lane?.pullRequest?.url).toBe("https://github.com/example/meow-team/pull/91");
+    expect(lane?.recoveryCheckpoint).toBeNull();
   });
 
   it("uses a dev commit prefix for default implementation work", async () => {

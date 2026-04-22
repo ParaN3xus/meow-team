@@ -10,12 +10,14 @@ import {
   runTeam,
 } from "@/lib/team/coding";
 import { confirmLaneAgentRetryRound } from "@/lib/team/agent-retry";
+import { approveLanePullRequest } from "@/lib/team/coding/archiving";
+import { approveLaneProposal } from "@/lib/team/coding/coding";
 import {
   confirmPlannerRetryRound,
   TeamPlannerRetryConfirmationRequiredError,
 } from "@/lib/team/planner-retry";
 import { findAssignment, findLane } from "@/lib/team/coding/shared";
-import { ensurePendingDispatchWork } from "@/lib/team/coding/reviewing";
+import { ensurePendingDispatchWork, resumeFailedLane } from "@/lib/team/coding/reviewing";
 import { getLaneFinalizationMode } from "@/lib/team/finalization";
 import { cancelLatestThreadAssignmentApprovalWait, markTeamThreadFailed } from "@/lib/team/history";
 import { getTeamThreadRecord } from "@/lib/team/history";
@@ -82,12 +84,54 @@ export const confirmLaneAgentRetry = async ({
   laneId: string;
 }) => {
   const env = createTeamRunEnv();
-  await confirmLaneAgentRetryRound({
+  const thread = await getTeamThreadRecord(teamConfig.storage.threadFile, threadId);
+  if (!thread) {
+    throw new Error(`Thread ${threadId} was not found in ${teamConfig.storage.threadFile}.`);
+  }
+
+  const assignment = findAssignment(thread.dispatchAssignments, assignmentNumber);
+  const lane = findLane(assignment, laneId);
+  if (lane.status === "awaiting_retry_approval") {
+    await confirmLaneAgentRetryRound({
+      threadId,
+      assignmentNumber,
+      laneId,
+    });
+    await ensurePendingDispatchWork(env, threadId);
+    return;
+  }
+
+  if (lane.status !== "failed" || !lane.recoveryCheckpoint) {
+    throw new Error("This proposal is not waiting for retry confirmation.");
+  }
+
+  if (lane.recoveryCheckpoint.kind === "proposal_approval") {
+    await approveLaneProposal({
+      env,
+      threadId,
+      assignmentNumber,
+      laneId,
+    });
+    return;
+  }
+
+  if (lane.recoveryCheckpoint.kind === "pull_request_approval") {
+    await approveLanePullRequest({
+      env,
+      threadId,
+      assignmentNumber,
+      laneId,
+      finalizationMode: lane.recoveryCheckpoint.finalizationMode,
+    });
+    return;
+  }
+
+  await resumeFailedLane({
+    env,
     threadId,
     assignmentNumber,
     laneId,
   });
-  await ensurePendingDispatchWork(env, threadId);
 };
 
 export const confirmPlannerRetry = async ({ threadId }: { threadId: string }) => {

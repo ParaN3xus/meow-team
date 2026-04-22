@@ -5,6 +5,7 @@ import type {
   TeamWorkerLaneCounts,
   TeamWorkerLaneRecord,
 } from "@/lib/team/types";
+import { getLaneRecoveryCheckpointSkipReason } from "@/lib/team/recovery";
 
 export const THREAD_COMMAND_ARCHIVED_REASON =
   "Archived threads are read-only. Thread commands only run while the latest assignment is idle.";
@@ -138,13 +139,35 @@ export const getApproveCommandSkipReason = (
 };
 
 export const getRetryCommandSkipReason = (
-  lane: Pick<TeamWorkerLaneRecord, "retryState" | "status">,
+  lane: Pick<
+    TeamWorkerLaneRecord,
+    | "baseBranch"
+    | "branchName"
+    | "latestCoderHandoff"
+    | "latestImplementationCommit"
+    | "latestReviewerHandoff"
+    | "proposalChangeName"
+    | "proposalDisposition"
+    | "proposalPath"
+    | "pullRequest"
+    | "pushedCommit"
+    | "recoveryCheckpoint"
+    | "retryState"
+    | "status"
+  >,
 ): string | null => {
   if (lane.status === "awaiting_retry_approval" && lane.retryState?.awaitingConfirmationSince) {
     return null;
   }
 
-  return "it is not waiting for agent retry confirmation.";
+  const recoverySkipReason = getLaneRecoveryCheckpointSkipReason(lane);
+  if (!recoverySkipReason) {
+    return null;
+  }
+
+  return lane.status === "failed"
+    ? recoverySkipReason
+    : "it is not waiting for agent retry confirmation.";
 };
 
 export const getReadyCommandSkipReason = (

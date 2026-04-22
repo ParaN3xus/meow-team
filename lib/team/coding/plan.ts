@@ -173,6 +173,7 @@ const createProposalLane = ({
     revisionCount: 0,
     requeueReason: null,
     retryState: null,
+    recoveryCheckpoint: null,
     lastError: null,
     pullRequest: null,
     events: [createLaneEvent("planner", `Planner proposed: ${task.title}`, now)],

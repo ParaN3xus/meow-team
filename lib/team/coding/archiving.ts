@@ -47,10 +47,16 @@ export const approveLanePullRequest = async ({
   const assignment = findAssignment(thread.dispatchAssignments, assignmentNumber);
   const lane = findLane(assignment, laneId);
   const pullRequest = lane.pullRequest;
+  const finalizationRecovery = lane.recoveryCheckpoint;
   const archiveInProgress =
     isFinalArchivePhase(lane) && (lane.status === "queued" || lane.status === "coding");
 
-  if ((!archiveInProgress && lane.status !== "approved") || !pullRequest) {
+  if (
+    (!archiveInProgress &&
+      lane.status !== "approved" &&
+      !(lane.status === "failed" && finalizationRecovery?.kind === "pull_request_approval")) ||
+    !pullRequest
+  ) {
     throw new Error("This reviewed branch is not waiting for final human approval.");
   }
 
@@ -101,7 +107,15 @@ export const approveLanePullRequest = async ({
         isFinalArchivePhase(mutableLane) &&
         (mutableLane.status === "queued" || mutableLane.status === "coding");
 
-      if ((!mutableArchiveInProgress && mutableLane.status !== "approved") || !mutablePullRequest) {
+      if (
+        (!mutableArchiveInProgress &&
+          mutableLane.status !== "approved" &&
+          !(
+            mutableLane.status === "failed" &&
+            mutableLane.recoveryCheckpoint?.kind === "pull_request_approval"
+          )) ||
+        !mutablePullRequest
+      ) {
         throw new Error("This reviewed branch is not waiting for final human approval.");
       }
 
@@ -157,6 +171,7 @@ export const approveLanePullRequest = async ({
         isResume,
       });
       mutableLane.lastError = null;
+      mutableLane.recoveryCheckpoint = null;
       mutableLane.workerSlot = null;
       mutableLane.worktreePath = threadWorktree.path;
       mutableLane.queuedAt = now;
