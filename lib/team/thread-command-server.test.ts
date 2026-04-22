@@ -329,16 +329,25 @@ describe("executeThreadCommandForThread", () => {
     expect(result.message).toContain("Stopped on proposal 2: archive continuation failed");
   });
 
-  it("keeps /ready retryable after archive failures that already recorded human approval", async () => {
+  it("routes /retry to failed final-approval checkpoints after human approval", async () => {
     const executors = createExecutors();
     const thread = createThread([
       createAssignment(1, {
-        status: "approved",
+        status: "failed",
         lanes: [
           createLane({
             laneId: "lane-1",
             laneIndex: 1,
-            status: "approved",
+            status: "failed",
+            recoveryCheckpoint: {
+              kind: "pull_request_approval",
+              checkpoint: "branch_pushed",
+              failedStage: "pull_request_approval",
+              finalizationMode: "archive",
+              proposalDisposition: "archived",
+              summary: "Resume final approval from the saved finalization checkpoint.",
+              recordedAt: FIXED_TIMESTAMP,
+            },
             pullRequest: createPullRequest({
               status: "failed",
               humanApprovedAt: FIXED_TIMESTAMP,
@@ -349,24 +358,23 @@ describe("executeThreadCommandForThread", () => {
     ]);
 
     const result = await executeThreadCommandForThread({
-      command: parseThreadCommand("/ready 1"),
+      command: parseThreadCommand("/retry 1"),
       executors,
       thread,
     });
 
-    expect(executors.runApproval).toHaveBeenCalledWith({
+    expect(executors.confirmRetry).toHaveBeenCalledWith({
       assignmentNumber: 1,
       laneId: "lane-1",
-      target: "pull_request",
       threadId: "thread-1",
     });
     expect(result).toMatchObject({
       assignmentNumber: 1,
-      commandName: "ready",
+      commandName: "retry",
       outcome: "success",
     });
     expect(result.message).toContain(
-      "Proposal 1 final approval recorded. The finalization continuation was queued.",
+      "Resume final approval from the saved finalization checkpoint.",
     );
   });
 

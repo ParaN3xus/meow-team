@@ -872,6 +872,7 @@ const runFinalArchiveCycle = async ({
         mutableLane.proposalPath = proposalPath;
         mutableLane.latestImplementationCommit = finalizedCommitHash;
         mutableLane.pushedCommit = finalizedPushedCommit;
+        mutableLane.recoveryCheckpoint = null;
         if (coderHandoff) {
           mutableLane.latestCoderHandoff = coderHandoff;
           mutableLane.latestCoderSummary = coderHandoff.summary;
@@ -958,7 +959,7 @@ const runFinalArchiveCycle = async ({
           throw new Error("This reviewed branch no longer has pull request metadata.");
         }
 
-        mutableLane.status = "approved";
+        mutableLane.status = "failed";
         mutableLane.executionPhase = null;
         mutableLane.finalizationMode = finalizationMode;
         mutableLane.proposalDisposition = proposalDisposition;
@@ -974,6 +975,15 @@ const runFinalArchiveCycle = async ({
           checkpoint: finalizationCheckpoint,
           mode: finalizationMode,
         });
+        mutableLane.recoveryCheckpoint = {
+          kind: "pull_request_approval",
+          checkpoint: finalizationCheckpoint,
+          failedStage: "pull_request_approval",
+          finalizationMode,
+          proposalDisposition,
+          summary: "Resume final approval from the saved finalization checkpoint.",
+          recordedAt: now,
+        };
         mutableLane.lastError = errorSummary;
         mutableLane.workerSlot = null;
         mutableLane.requeueReason = null;
@@ -1238,6 +1248,15 @@ const runLaneCycle = async ({
             mutableLane.latestActivity =
               "Reviewer retry could not start because publishing the lane branch to GitHub failed.";
             mutableLane.retryState = null;
+            mutableLane.recoveryCheckpoint = {
+              kind: "lane_execution",
+              failedStage: "coding_delivery",
+              resumeStatus: "reviewing",
+              resumeExecutionPhase: "implementation",
+              requeueReason: null,
+              summary: "Resume review delivery from the saved implementation checkpoint.",
+              recordedAt: now,
+            };
             mutableLane.lastError = publishErrorMessage;
             mutableLane.runCount += 1;
             mutableLane.workerSlot = null;
@@ -1369,6 +1388,7 @@ const runLaneCycle = async ({
             mutableLane.latestDecision = completedCoderHandoff.decision;
             mutableLane.latestActivity = "Coder finished without producing branch output.";
             mutableLane.retryState = null;
+            mutableLane.recoveryCheckpoint = null;
             mutableLane.lastError = noBranchOutputMessage;
             mutableLane.runCount += 1;
             mutableLane.workerSlot = null;
@@ -1448,8 +1468,17 @@ const runLaneCycle = async ({
             mutableLane.latestCoderSummary = completedCoderHandoff.summary;
             mutableLane.latestDecision = completedCoderHandoff.decision;
             mutableLane.latestActivity =
-              "Coder finished implementation, but publishing the lane branch to GitHub failed before review could start.";
+              "Coding delivery failed before review could start. Confirm /retry to resume review from the saved implementation checkpoint.";
             mutableLane.retryState = null;
+            mutableLane.recoveryCheckpoint = {
+              kind: "lane_execution",
+              failedStage: "coding_delivery",
+              resumeStatus: "reviewing",
+              resumeExecutionPhase: "implementation",
+              requeueReason: null,
+              summary: "Resume review delivery from the saved implementation checkpoint.",
+              recordedAt: now,
+            };
             mutableLane.lastError = publishErrorMessage;
             mutableLane.runCount += 1;
             mutableLane.workerSlot = null;
@@ -1523,6 +1552,7 @@ const runLaneCycle = async ({
           mutableLane.latestCoderSummary = completedCoderHandoff.summary;
           mutableLane.latestDecision = completedCoderHandoff.decision;
           mutableLane.retryState = null;
+          mutableLane.recoveryCheckpoint = null;
           mutableLane.lastError = null;
           mutableLane.latestActivity = `Reviewer is evaluating published implementation commit ${reviewCommit}.`;
           mutableLane.updatedAt = now;
@@ -1689,7 +1719,16 @@ const runLaneCycle = async ({
             mutableLane.latestCoderSummary = coderHandoff.summary;
             mutableLane.latestReviewerSummary = reviewerHandoff.summary;
             mutableLane.latestActivity =
-              "Reviewer requested changes, but publishing the feedback branch head to GitHub failed before the coder could be requeued.";
+              "Reviewer feedback delivery failed before the coder could be requeued. Confirm /retry to continue from the saved reviewer checkpoint.";
+            mutableLane.recoveryCheckpoint = {
+              kind: "lane_execution",
+              failedStage: "review_feedback_delivery",
+              resumeStatus: "queued",
+              resumeExecutionPhase: "implementation",
+              requeueReason: "reviewer_requested_changes",
+              summary: "Resume coding from the saved reviewer-feedback checkpoint.",
+              recordedAt: now,
+            };
             mutableLane.runCount += 1;
             mutableLane.workerSlot = null;
             mutableLane.requeueReason = null;
@@ -1766,6 +1805,7 @@ const runLaneCycle = async ({
           mutableLane.latestCoderSummary = coderHandoff.summary;
           mutableLane.latestReviewerSummary = reviewerHandoff.summary;
           mutableLane.latestActivity = latestActivity;
+          mutableLane.recoveryCheckpoint = null;
           mutableLane.runCount += 1;
           mutableLane.revisionCount += 1;
           mutableLane.queuedAt = now;
@@ -1938,7 +1978,14 @@ const runLaneCycle = async ({
           mutableLane.latestCoderSummary = coderHandoff.summary;
           mutableLane.latestReviewerSummary = reviewerHandoff.summary;
           mutableLane.latestActivity =
-            "Machine review approved the proposal, but publishing the lane branch to GitHub failed.";
+            "Review delivery failed before the approved branch could be published. Confirm /retry to resume final-approval delivery from the saved review checkpoint.";
+          mutableLane.recoveryCheckpoint = {
+            kind: "review_approval_delivery",
+            checkpoint: "requested",
+            failedStage: "review_approval_delivery",
+            summary: "Resume final-approval delivery from the saved review checkpoint.",
+            recordedAt: mutableNow,
+          };
           mutableLane.runCount += 1;
           mutableLane.workerSlot = null;
           mutableLane.requeueReason = null;
@@ -2048,7 +2095,16 @@ const runLaneCycle = async ({
           mutableLane.latestCoderSummary = coderHandoff.summary;
           mutableLane.latestReviewerSummary = reviewerHandoff.summary;
           mutableLane.latestActivity =
-            "Machine review approved the proposal, but refreshing the tracking GitHub PR for final approval failed.";
+            "Review delivery failed after publishing the approved branch. Confirm /retry to refresh the tracking GitHub PR from the saved review checkpoint.";
+          mutableLane.recoveryCheckpoint = {
+            kind: "review_approval_delivery",
+            checkpoint: "branch_pushed",
+            failedStage: "review_approval_delivery",
+            summary:
+              "Resume final-approval delivery from the saved branch-pushed review checkpoint.",
+            recordedAt: mutableNow,
+          };
+          mutableLane.status = "failed";
           mutableLane.runCount += 1;
           mutableLane.workerSlot = null;
           mutableLane.requeueReason = null;
@@ -2131,6 +2187,7 @@ const runLaneCycle = async ({
         mutableLane.latestCoderSummary = coderHandoff.summary;
         mutableLane.latestReviewerSummary = reviewerHandoff.summary;
         mutableLane.latestActivity = publishLatestActivity;
+        mutableLane.recoveryCheckpoint = null;
         mutableLane.runCount += 1;
         mutableLane.workerSlot = null;
         mutableLane.requeueReason = null;
@@ -2234,13 +2291,24 @@ const ensureLaneRun = ({
           const assignment = findAssignment(thread.dispatchAssignments, assignmentNumber);
           const lane = findLane(assignment, laneId);
           const isFinalArchiveLane = isFinalArchivePhase(lane);
-          lane.status = isFinalArchiveLane ? "approved" : "failed";
+          lane.status = "failed";
           lane.executionPhase = null;
           lane.workerSlot = null;
           lane.lastError = message;
           lane.latestActivity = isFinalArchiveLane
             ? "Final human approval failed before the coder archive pass and GitHub PR refresh could complete."
             : "Background lane execution failed.";
+          lane.recoveryCheckpoint = isFinalArchiveLane
+            ? {
+                kind: "pull_request_approval",
+                checkpoint: lane.finalizationCheckpoint ?? "requested",
+                failedStage: "pull_request_approval",
+                finalizationMode: getLaneFinalizationMode(lane) ?? "archive",
+                proposalDisposition: getLaneProposalDisposition(lane),
+                summary: "Resume final approval from the saved finalization checkpoint.",
+                recordedAt: now,
+              }
+            : (lane.recoveryCheckpoint ?? null);
           if (lane.pullRequest) {
             lane.pullRequest = {
               ...lane.pullRequest,
@@ -2280,6 +2348,203 @@ const ensureLaneRun = ({
   })();
 
   activeLaneRuns.set(key, runPromise);
+};
+
+const resumeReviewApprovalDelivery = async ({
+  threadId,
+  assignmentNumber,
+  laneId,
+}: {
+  threadId: string;
+  assignmentNumber: number;
+  laneId: string;
+}): Promise<void> => {
+  const thread = await getTeamThreadRecord(teamConfig.storage.threadFile, threadId);
+  if (!thread) {
+    throw new Error(`Thread ${threadId} was not found in ${teamConfig.storage.threadFile}.`);
+  }
+
+  const assignment = findAssignment(thread.dispatchAssignments, assignmentNumber);
+  const lane = findLane(assignment, laneId);
+  const checkpoint = lane.recoveryCheckpoint;
+  if (lane.status !== "failed" || checkpoint?.kind !== "review_approval_delivery") {
+    throw new Error("This proposal is not waiting to resume review delivery.");
+  }
+  if (
+    !assignment.repository ||
+    !lane.branchName ||
+    !lane.baseBranch ||
+    !lane.latestImplementationCommit ||
+    !lane.latestCoderHandoff ||
+    !lane.latestReviewerHandoff ||
+    !lane.pullRequest
+  ) {
+    throw new Error(
+      "This proposal is missing the saved review-delivery metadata required to resume.",
+    );
+  }
+
+  const laneWorktree = getThreadOwnedWorktreeOrThrow({
+    threadId,
+    worktree: thread.data.threadWorktree,
+  });
+  const reviewPullRequestDraft = buildCanonicalLanePullRequestDraft({
+    assignment,
+    lane,
+    summary: lane.pullRequest.summary ?? lane.latestReviewerHandoff.summary,
+  });
+
+  const publishedCommit =
+    checkpoint.checkpoint === "branch_pushed" && lane.pushedCommit
+      ? lane.pushedCommit
+      : (
+          await publishLaneBranchHead({
+            repositoryPath: laneWorktree.path,
+            branchName: lane.branchName,
+            commitHash: lane.latestImplementationCommit,
+            pushedCommit: lane.pushedCommit,
+          })
+        ).pushedCommit;
+
+  const synchronizedPullRequest = await synchronizePullRequest({
+    repositoryPath: laneWorktree.path,
+    branchName: lane.branchName,
+    baseBranch: lane.baseBranch,
+    title: reviewPullRequestDraft.title,
+    body: reviewPullRequestDraft.summary,
+    draft: false,
+  });
+
+  await updateTeamThreadRecord({
+    threadFile: teamConfig.storage.threadFile,
+    threadId,
+    updater: (mutableThread, now) => {
+      const mutableAssignment = findAssignment(mutableThread.dispatchAssignments, assignmentNumber);
+      const mutableLane = findLane(mutableAssignment, laneId);
+      const mutablePullRequest = mutableLane.pullRequest;
+      if (!mutablePullRequest) {
+        throw new Error("This proposal no longer has tracking pull request metadata.");
+      }
+
+      mutableLane.status = "approved";
+      mutableLane.executionPhase = null;
+      mutableLane.finalizationMode = null;
+      mutableLane.proposalDisposition = "active";
+      mutableLane.finalizationCheckpoint = null;
+      mutableLane.latestActivity =
+        "Review delivery resumed from the saved checkpoint and is waiting for final human approval.";
+      mutableLane.lastError = null;
+      mutableLane.recoveryCheckpoint = null;
+      mutableLane.workerSlot = null;
+      mutableLane.pushedCommit = publishedCommit;
+      mutableLane.pullRequest = {
+        ...mutablePullRequest,
+        provider: "github",
+        title: reviewPullRequestDraft.title,
+        summary: reviewPullRequestDraft.summary,
+        status: "awaiting_human_approval",
+        humanApprovalRequestedAt: now,
+        machineReviewedAt: mutablePullRequest.machineReviewedAt ?? now,
+        updatedAt: now,
+        url: synchronizedPullRequest.url,
+      };
+      mutableLane.updatedAt = now;
+      mutableLane.finishedAt = now;
+      appendLaneEvent(
+        mutableLane,
+        "human",
+        "Human confirmed review-delivery recovery from the saved checkpoint.",
+        now,
+      );
+      appendLaneEvent(
+        mutableLane,
+        "system",
+        `GitHub PR ready: ${synchronizedPullRequest.url}`,
+        now,
+      );
+      appendPlannerNote(
+        mutableAssignment,
+        `Human resumed review delivery for proposal ${mutableLane.laneIndex}; final human approval is waiting on the refreshed GitHub PR.`,
+        now,
+      );
+      synchronizeDispatchAssignment(mutableAssignment, now);
+    },
+  });
+};
+
+export const resumeFailedLane = async ({
+  env,
+  threadId,
+  assignmentNumber,
+  laneId,
+}: {
+  env: TeamRunEnv;
+  threadId: string;
+  assignmentNumber: number;
+  laneId: string;
+}): Promise<void> => {
+  const thread = await getTeamThreadRecord(teamConfig.storage.threadFile, threadId);
+  if (!thread) {
+    throw new Error(`Thread ${threadId} was not found in ${teamConfig.storage.threadFile}.`);
+  }
+
+  const assignment = findAssignment(thread.dispatchAssignments, assignmentNumber);
+  const lane = findLane(assignment, laneId);
+  const checkpoint = lane.recoveryCheckpoint;
+
+  if (lane.status !== "failed" || !checkpoint) {
+    throw new Error("This proposal is not waiting to resume from a failed checkpoint.");
+  }
+
+  if (checkpoint.kind === "review_approval_delivery") {
+    await resumeReviewApprovalDelivery({
+      threadId,
+      assignmentNumber,
+      laneId,
+    });
+    return;
+  }
+
+  if (checkpoint.kind !== "lane_execution") {
+    throw new Error(
+      "This failed proposal must be resumed through its stage-specific approval flow.",
+    );
+  }
+
+  await updateTeamThreadRecord({
+    threadFile: teamConfig.storage.threadFile,
+    threadId,
+    updater: (mutableThread, now) => {
+      const mutableAssignment = findAssignment(mutableThread.dispatchAssignments, assignmentNumber);
+      const mutableLane = findLane(mutableAssignment, laneId);
+      const mutableCheckpoint = mutableLane.recoveryCheckpoint;
+      if (mutableLane.status !== "failed" || mutableCheckpoint?.kind !== "lane_execution") {
+        throw new Error("This proposal is not waiting to resume failed lane execution.");
+      }
+
+      mutableLane.status = mutableCheckpoint.resumeStatus;
+      mutableLane.executionPhase = mutableCheckpoint.resumeExecutionPhase;
+      mutableLane.requeueReason = mutableCheckpoint.requeueReason;
+      mutableLane.lastError = null;
+      mutableLane.latestActivity = mutableCheckpoint.summary;
+      mutableLane.finishedAt = null;
+      mutableLane.updatedAt = now;
+      appendLaneEvent(
+        mutableLane,
+        "human",
+        `Human confirmed lane recovery: ${mutableCheckpoint.summary}`,
+        now,
+      );
+      appendPlannerNote(
+        mutableAssignment,
+        `Human resumed proposal ${mutableLane.laneIndex} from the saved ${mutableCheckpoint.failedStage.replaceAll("_", " ")} checkpoint.`,
+        now,
+      );
+      synchronizeDispatchAssignment(mutableAssignment, now);
+    },
+  });
+
+  await ensurePendingDispatchWork(env, threadId);
 };
 
 const prioritizeThreadIds = (threadIds: string[], prioritizedThreadId?: string): string[] => {

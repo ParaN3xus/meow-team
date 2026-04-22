@@ -279,6 +279,20 @@ export const confirmPlannerRetryRound = async ({
           updatedAt: now,
         },
       };
+      const assignment = thread.dispatchAssignments.find(
+        (candidate) =>
+          candidate.assignmentNumber === retryState.resumeState.context.state.assignmentNumber,
+      );
+      if (assignment) {
+        assignment.plannerNotes = [
+          ...assignment.plannerNotes,
+          {
+            id: crypto.randomUUID(),
+            message: `Human resumed planner recovery from the saved ${retryState.resumeState.stage} checkpoint.`,
+            createdAt: now,
+          },
+        ];
+      }
     },
   });
 

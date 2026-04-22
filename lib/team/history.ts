@@ -327,6 +327,7 @@ const normalizeWorkerLane = (lane: TeamWorkerLaneRecord): TeamWorkerLaneRecord =
     approvalGrantedAt: lane.approvalGrantedAt ?? null,
     queuedAt: lane.queuedAt ?? null,
     retryState: lane.retryState ?? null,
+    recoveryCheckpoint: lane.recoveryCheckpoint ?? null,
     pullRequest: lane.pullRequest
       ? {
           ...lane.pullRequest,

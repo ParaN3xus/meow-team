@@ -86,6 +86,41 @@ export type TeamAgentRetryState = {
   updatedAt: string;
 };
 
+export type TeamLaneRecoveryCheckpoint =
+  | {
+      kind: "proposal_approval";
+      checkpoint: "requested" | "branch_pushed";
+      failedStage: "proposal_approval";
+      resumeStatus: "failed";
+      summary: string;
+      recordedAt: string;
+    }
+  | {
+      kind: "lane_execution";
+      failedStage: "coding_delivery" | "review_feedback_delivery";
+      resumeStatus: Extract<TeamWorkerLaneStatus, "queued" | "reviewing">;
+      resumeExecutionPhase: TeamWorkerLaneExecutionPhase;
+      requeueReason: "reviewer_requested_changes" | "planner_detected_conflict" | null;
+      summary: string;
+      recordedAt: string;
+    }
+  | {
+      kind: "review_approval_delivery";
+      checkpoint: "requested" | "branch_pushed";
+      failedStage: "review_approval_delivery";
+      summary: string;
+      recordedAt: string;
+    }
+  | {
+      kind: "pull_request_approval";
+      checkpoint: TeamLaneFinalizationCheckpoint;
+      failedStage: "pull_request_approval";
+      finalizationMode: TeamLaneFinalizationMode;
+      proposalDisposition: TeamLaneProposalDisposition | null;
+      summary: string;
+      recordedAt: string;
+    };
+
 export type TeamLaneFinalizationMode = "archive" | "delete";
 
 export type TeamLaneProposalDisposition = "active" | "archived" | "deleted";
@@ -192,6 +227,7 @@ export type TeamWorkerLaneRecord = {
   revisionCount: number;
   requeueReason: "reviewer_requested_changes" | "planner_detected_conflict" | null;
   retryState?: TeamAgentRetryState | null;
+  recoveryCheckpoint?: TeamLaneRecoveryCheckpoint | null;
   lastError: string | null;
   pullRequest: TeamPullRequestRecord | null;
   events: TeamWorkerEvent[];
